@@ -54,15 +54,15 @@ async function scrapeDetail(bookUrl) {
   return { cover, episodes };
 }
 
-// API endpoint
 app.get('/api/crawl', async (req, res) => {
   const page = parseInt(req.query.page) || 1;
+  const limitDetail = parseInt(req.query.limitDetail) || 1; // giới hạn số bài crawl chi tiết
   try {
     const list = await scrapePage(page);
 
-    // Crawl chi tiết từng truyện **song song với concurrency cao**
+    // Chỉ crawl chi tiết cho 1 bài đầu tiên (hoặc số bài limitDetail)
     const results = await Promise.all(
-      list.map(book => limit(() =>
+      list.slice(0, limitDetail).map(book => limit(() =>
         scrapeDetail(book.link).then(detail => ({
           title: book.title,
           link: book.link,
@@ -78,6 +78,8 @@ app.get('/api/crawl', async (req, res) => {
   }
 });
 
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
+
