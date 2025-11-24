@@ -6,16 +6,24 @@ const pLimit = require('p-limit').default;
 
 const app = express();
 const PORT = 3000;
-
-const BASE = 'https://ckbh.vip';
-const CONCURRENCY = 10; // tăng concurrency
+const CONCURRENCY = 10;
 const limit = pLimit(CONCURRENCY);
 
-// Lấy danh sách truyện từ 1 page
-async function scrapePage(page = 1) {
-  const url = `${BASE}/index.php/vod/type/id/56/page/${page}.html`;
+// Danh sách 6 nguồn
+const SOURCES = [
+  { id: 56, base: 'https://ckbh.vip' },
+  { id: 21, base: 'https://ckbh.vip' },
+  { id: 23, base: 'https://ckbh.vip' },
+  { id: 29, base: 'https://ckbh.vip' },
+  { id: 40, base: 'https://ckbh.vip' },
+  { id: 50, base: 'https://ckbh.vip' },
+];
+
+// Hàm scrape danh sách video theo source và page
+async function scrapePage(source, page = 1) {
+  const url = `${source.base}/index.php/vod/type/id/${source.id}/page/${page}.html`;
   const { data } = await axios.get(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': BASE }
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': source.base }
   });
 
   const $ = cheerio.load(data);
@@ -24,46 +32,50 @@ async function scrapePage(page = 1) {
   $('ul li').each((i, li) => {
     const a = $(li).find('a.videoName');
     if (!a.length) return;
-    const title = a.text().trim();
-    const href = BASE + a.attr('href');
-    results.push({ title, link: href });
+    results.push({
+      title: a.text().trim(),
+      link: source.base + a.attr('href')
+    });
   });
 
   return results;
 }
 
-// Lấy chi tiết truyện: ảnh + link m3u8
-async function scrapeDetail(bookUrl) {
+// Hàm scrape chi tiết video: cover + m3u8
+async function scrapeDetail(source, bookUrl) {
   const { data } = await axios.get(bookUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': BASE }
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': source.base }
   });
   const $ = cheerio.load(data);
 
-  // Ảnh cover
   const img = $('div.left img').attr('src');
-  const cover = img ? BASE + img : null;
+  const cover = img ? source.base + img : null;
 
-  // Các tập: tìm font color red
   const episodes = [];
   $('font[color="red"]').each((i, el) => {
     const text = $(el).text().trim();
-    const [ep, link] = text.split('$');
-    if (link) episodes.push(link); // chỉ lấy link m3u8
+    const [_, link] = text.split('$');
+    if (link) episodes.push(link);
   });
 
   return { cover, episodes };
 }
 
-// API endpoint
-app.get('/api/crawl', async (req, res) => {
+// Endpoint crawl từng page theo sourceId
+app.get('/api/crawl/:sourceId', async (req, res) => {
+  const sourceId = parseInt(req.params.sourceId);
   const page = parseInt(req.query.page) || 1;
-  try {
-    const list = await scrapePage(page);
+  const source = SOURCES.find(s => s.id === sourceId);
 
-    // Crawl chi tiết từng truyện **song song với concurrency cao**
+  if (!source) return res.status(400).json({ error: 'Nguồn không tồn tại' });
+
+  try {
+    const list = await scrapePage(source, page);
+
+    // Crawl chi tiết từng video với concurrency cao
     const results = await Promise.all(
       list.map(book => limit(() =>
-        scrapeDetail(book.link).then(detail => ({
+        scrapeDetail(source, book.link).then(detail => ({
           title: book.title,
           link: book.link,
           cover: detail.cover,
@@ -72,7 +84,7 @@ app.get('/api/crawl', async (req, res) => {
       ))
     );
 
-    res.json({ page, total: results.length, results });
+    res.json({ source: source.id, page, total: results.length, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -80,5 +92,6 @@ app.get('/api/crawl', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`📌 Endpoints available:`);
+  SOURCES.forEach(s => console.log(`   /api/crawl/${s.id}?page=1`));
 });
-
